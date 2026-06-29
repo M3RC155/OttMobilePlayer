@@ -1,4 +1,3 @@
-import { File, Paths } from 'expo-file-system';
 import { initDb, setPlaylistError, markPlaylistParsed } from './db';
 
 const getErrorMessage = (error: any): string => {
@@ -19,120 +18,174 @@ const getErrorMessage = (error: any): string => {
     return msg;
 };
 
+const toRawUrl = (url: string): string =>
+    url.replace(/^https?:\/\/github\.com\/([^/]+\/[^/]+)\/blob\//, 'https://raw.githubusercontent.com/$1/');
+
+const fetchText = async (url: string): Promise<string> => {
+    const res = await fetch(toRawUrl(url));
+    if (!res.ok) throw new Error(`${res.status}`);
+    return res.text();
+};
+
+const insertChannelBatch = async (db: any, batch: any[]) => {
+    if (batch.length === 0) return;
+    await db.withTransactionAsync(async () => {
+        for (const ch of batch) {
+            await db.runAsync(
+                'INSERT INTO Channels (playlistId, name, streamUrl, logoUrl, tvgName, tvgId) VALUES (?, ?, ?, ?, ?, ?)',
+                [ch.playlistId, ch.name, ch.streamUrl, ch.logoUrl, ch.tvgName, ch.tvgId]
+            );
+        }
+    });
+    await new Promise(resolve => setTimeout(resolve, 0));
+};
+
 export const parsePlaylistBackground = async (playlistId: number, url: string) => {
+    if (url.includes('player_api.php')) {
+        return parseXtreamBackground(playlistId, url);
+    }
+
     try {
-        const playlistFile = new File(Paths.document, `playlist_${playlistId}.m3u`);
-        console.log('Downloading playlist to', playlistFile.uri);
-
-        // This will automatically throw if status is not 2xx
-        await File.downloadFileAsync(url, playlistFile);
-        console.log(`[Parser] Download finished successfully`);
-
-        if (!playlistFile.exists) throw new Error('File not found after download');
-
-        const content = await playlistFile.text();
-        console.log(`[Parser] File read into memory, length: ${content.length} characters`);
+        const content = await fetchText(url);
 
         const lines = content.split('\n');
-        console.log(`[Parser] Found ${lines.length} lines in playlist`);
         const db = await initDb();
 
-        let batchChannels: any[] = [];
-        const processBatch = async () => {
-            if (batchChannels.length === 0) return;
-
-            // Insert in transaction
-            await db.withTransactionAsync(async () => {
-                for (const ch of batchChannels) {
-                    await db.runAsync(
-                        'INSERT INTO Channels (playlistId, name, streamUrl, logoUrl, tvgName, tvgId) VALUES (?, ?, ?, ?, ?, ?)',
-                        [playlistId, ch.name, ch.streamUrl, ch.logoUrl, ch.tvgName, ch.tvgId]
-                    );
-                }
-            });
-            console.log(`[Parser] Processed batch of ${batchChannels.length} channels`);
-            batchChannels = [];
-            // Yield to UI thread
-            await new Promise(resolve => setTimeout(resolve, 0));
-        };
-
-        let currentChannel: any = null;
+        let batch: any[] = [];
+        let current: any = null;
+        let count = 0;
 
         for (let i = 0; i < lines.length; i++) {
             const line = lines[i].trim();
             if (!line) continue;
 
             if (line.startsWith('#EXTINF:')) {
-                currentChannel = {
-                    playlistId,
-                    name: 'Unknown Channel',
-                    streamUrl: '',
-                    logoUrl: null,
-                    tvgName: null,
-                    tvgId: null
-                };
+                current = { playlistId, name: 'Unknown Channel', streamUrl: '', logoUrl: null, tvgName: null, tvgId: null };
 
                 const commaIndex = line.indexOf(',');
-                if (commaIndex !== -1) {
-                    currentChannel.name = line.substring(commaIndex + 1).trim();
-                }
+                if (commaIndex !== -1) current.name = line.substring(commaIndex + 1).trim();
 
                 const tvgIdMatch = line.match(/tvg-id="([^"]+)"/);
-                if (tvgIdMatch) currentChannel.tvgId = tvgIdMatch[1];
-
+                if (tvgIdMatch) current.tvgId = tvgIdMatch[1];
                 const tvgNameMatch = line.match(/tvg-name="([^"]+)"/);
-                if (tvgNameMatch) currentChannel.tvgName = tvgNameMatch[1];
-
+                if (tvgNameMatch) current.tvgName = tvgNameMatch[1];
                 const logoMatch = line.match(/tvg-logo="([^"]+)"/);
-                if (logoMatch) currentChannel.logoUrl = logoMatch[1];
+                if (logoMatch) current.logoUrl = logoMatch[1];
             } else if (!line.startsWith('#')) {
-                if (currentChannel) {
-                    currentChannel.streamUrl = line;
-                    batchChannels.push(currentChannel);
-                    currentChannel = null;
-
-                    if (batchChannels.length >= 500) {
-                        await processBatch();
+                if (current) {
+                    current.streamUrl = line;
+                    batch.push(current);
+                    current = null;
+                    if (batch.length >= 500) {
+                        count += batch.length;
+                        await insertChannelBatch(db, batch);
+                        batch = [];
                     }
                 }
             }
         }
 
-        await processBatch();
+        count += batch.length;
+        await insertChannelBatch(db, batch);
 
-        // Mark as parsed
         await markPlaylistParsed(playlistId);
-
-        // Cleanup
-        if (playlistFile.exists) {
-            playlistFile.delete();
-        }
-        console.log(`[Parser] Finished parsing playlist ${playlistId} and cleaned up temp file.`);
-
-        // Now handle EPG if present
-        const playlistRows = await db.getAllAsync('SELECT epgUrl FROM Playlists WHERE id = ?', [playlistId]) as any[];
-        if (playlistRows.length > 0 && playlistRows[0].epgUrl) {
-            await parseEpgBackground(playlistId, playlistRows[0].epgUrl, db);
-        }
-
+        await maybeParseEpg(playlistId, db);
     } catch (error: any) {
         console.error('Error parsing playlist:', error);
         await setPlaylistError(playlistId, getErrorMessage(error));
     }
 };
 
+const parseXtreamBackground = async (playlistId: number, apiUrl: string) => {
+    try {
+        const u = new URL(apiUrl);
+        const base = `${u.protocol}//${u.host}`;
+        const username = u.searchParams.get('username') || '';
+        const password = u.searchParams.get('password') || '';
+        const creds = `username=${encodeURIComponent(username)}&password=${encodeURIComponent(password)}`;
+
+        const fetchJson = async (action?: string) => {
+            const target = action ? `${base}/player_api.php?${creds}&action=${action}` : `${base}/player_api.php?${creds}`;
+            const res = await fetch(target);
+            if (!res.ok) throw new Error(`${res.status}`);
+            return res.json();
+        };
+
+        const auth = await fetchJson();
+        if (!auth?.user_info || auth.user_info.auth !== 1) {
+            throw new Error('Invalid credentials. Check username and password.');
+        }
+
+        const db = await initDb();
+
+        const categoryName: Record<string, string> = {};
+        try {
+            const liveCats = await fetchJson('get_live_categories');
+            const vodCats = await fetchJson('get_vod_categories');
+            for (const c of [...(liveCats || []), ...(vodCats || [])]) {
+                categoryName[String(c.category_id)] = c.category_name;
+            }
+        } catch (e) {
+            console.warn('[Parser] Could not load Xtream categories, continuing without names', e);
+        }
+
+        let batch: any[] = [];
+        const flush = async (force = false) => {
+            if (batch.length >= 500 || (force && batch.length > 0)) {
+                await insertChannelBatch(db, batch);
+                batch = [];
+            }
+        };
+
+        const liveStreams = await fetchJson('get_live_streams');
+        for (const s of liveStreams || []) {
+            batch.push({
+                playlistId,
+                name: s.name || 'Unknown Channel',
+                streamUrl: `${base}/live/${username}/${password}/${s.stream_id}.ts`, // MPEGTS
+                logoUrl: s.stream_icon || null,
+                tvgName: categoryName[String(s.category_id)] || null,
+                tvgId: s.epg_channel_id || null,
+            });
+            await flush();
+        }
+
+        const vodStreams = await fetchJson('get_vod_streams');
+        for (const s of vodStreams || []) {
+            const ext = s.container_extension || 'mp4';
+            batch.push({
+                playlistId,
+                name: s.name || 'Unknown Movie',
+                streamUrl: `${base}/movie/${username}/${password}/${s.stream_id}.${ext}`,
+                logoUrl: s.stream_icon || null,
+                tvgName: categoryName[String(s.category_id)] || null,
+                tvgId: null,
+            });
+            await flush();
+        }
+
+        await flush(true);
+        await markPlaylistParsed(playlistId);
+
+        await maybeParseEpg(playlistId, db);
+    } catch (error: any) {
+        console.error('[Parser] Error importing Xtream:', error);
+        await setPlaylistError(playlistId, getErrorMessage(error));
+    }
+};
+
+const maybeParseEpg = async (playlistId: number, db: any) => {
+    const playlistRows = await db.getAllAsync('SELECT epgUrl FROM Playlists WHERE id = ?', [playlistId]) as any[];
+    if (playlistRows.length > 0 && playlistRows[0].epgUrl) {
+        await parseEpgBackground(playlistId, playlistRows[0].epgUrl, db);
+    }
+};
+
 const parseEpgBackground = async (playlistId: number, epgUrl: string, db: any) => {
     try {
-        const epgFile = new File(Paths.document, `epg_${playlistId}.xml`);
-        console.log('[Parser] Downloading EPG to', epgFile.uri);
-        await File.downloadFileAsync(epgUrl, epgFile);
-        if (!epgFile.exists) return;
-
-        const content = await epgFile.text();
-        console.log(`[Parser] EPG file read into memory, length: ${content.length} characters`);
+        const content = await fetchText(epgUrl);
 
         const blocks = content.split('<programme ');
-        console.log(`[Parser] EPG found ${blocks.length - 1} programme blocks`);
 
         let batchPrograms: any[] = [];
 
@@ -146,25 +199,19 @@ const parseEpgBackground = async (playlistId: number, epgUrl: string, db: any) =
                     );
                 }
             });
-            console.log(`[Parser] Processed EPG batch of ${batchPrograms.length} programs`);
             batchPrograms = [];
             await new Promise(resolve => setTimeout(resolve, 0));
         };
 
-        const unescapeXml = (safe: string) => {
-            return safe.replace(/&amp;/g, '&')
-                .replace(/&lt;/g, '<')
-                .replace(/&gt;/g, '>')
-                .replace(/&quot;/g, '"')
-                .replace(/&apos;/g, "'");
-        };
+        const unescapeXml = (safe: string) => safe
+            .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+            .replace(/&quot;/g, '"').replace(/&apos;/g, "'");
 
         for (let i = 1; i < blocks.length; i++) {
             const block = blocks[i];
             const startMatch = block.match(/start="([^"]+)"/);
             const stopMatch = block.match(/stop="([^"]+)"/);
             const channelMatch = block.match(/channel="([^"]+)"/);
-
             const titleMatch = block.match(/<title[^>]*>([^<]+)<\/title>/);
             const descMatch = block.match(/<desc[^>]*>([^<]+)<\/desc>/);
 
@@ -176,20 +223,11 @@ const parseEpgBackground = async (playlistId: number, epgUrl: string, db: any) =
                     title: unescapeXml(titleMatch[1]),
                     desc: descMatch ? unescapeXml(descMatch[1]) : ''
                 });
-
-                if (batchPrograms.length >= 500) {
-                    await processBatch();
-                }
+                if (batchPrograms.length >= 500) await processBatch();
             }
         }
         await processBatch();
-
-        if (epgFile.exists) {
-            epgFile.delete();
-        }
-        console.log(`[Parser] Finished parsing EPG for playlist ${playlistId}`);
     } catch (error: any) {
         console.error('[Parser] Error parsing EPG:', error);
-        await setPlaylistError(playlistId, getErrorMessage(error));
     }
 };

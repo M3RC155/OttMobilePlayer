@@ -16,17 +16,14 @@ export default function ChannelListScreen() {
     const [hasMore, setHasMore] = useState(true);
 
     useEffect(() => {
-        console.log(`[ChannelList] Screen mounted for playlistId=${playlistId}`);
         fetchChannels();
     }, []);
 
     const fetchChannels = async () => {
         if (loading || !hasMore) return;
-        console.log(`[ChannelList] Fetching channels page ${page}...`);
         setLoading(true);
         try {
             const data = await getChannelsFromDb(playlistId, page);
-            console.log(`[ChannelList] Received ${data.length} channels`);
             if (data.length > 0) {
                 setChannels(prev => [...prev, ...data]);
                 setPage(prev => prev + 1);
@@ -44,7 +41,6 @@ export default function ChannelListScreen() {
         <TouchableOpacity 
             style={styles.channelItem}
             onPress={() => {
-                console.log(`[ChannelList] Navigating to Player for channel: ${item.name}`);
                 navigation.navigate('Player', { streamUrl: item.streamUrl, title: item.name, tvgId: item.tvgId, playlistId });
             }}
         >

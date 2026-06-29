@@ -3,11 +3,17 @@
     "name": "OttMobilePlayer",
     "slug": "OttMobilePlayer",
     "version": "1.0.0",
-    "orientation": "portrait",
+    "orientation": "default",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSAppTransportSecurity": {
+          "NSAllowsArbitraryLoads": true
+        }
+      },
+      "bundleIdentifier": "com.anonymous.OttMobilePlayer"
     },
     "android": {
       "adaptiveIcon": {
@@ -24,7 +30,8 @@
     },
     "plugins": [
       "expo-video",
-      "expo-sqlite"
+      "expo-sqlite",
+      "react-native-vlc-media-player"
     ]
   }
 }

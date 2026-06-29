@@ -1,29 +1,36 @@
 import React, { useRef, useState, useEffect } from 'react';
 import { View, StyleSheet, TouchableOpacity, Text, FlatList, Animated } from 'react-native';
-import { useVideoPlayer, VideoView } from 'expo-video';
 import { useRoute, useNavigation } from '@react-navigation/native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import * as ScreenOrientation from 'expo-screen-orientation';
 import { getEpgForChannel } from '../db';
+import { NativePlayerView, VlcPlayerView, needsVlc } from './VideoPlayers';
 
 export default function PlayerScreen() {
     const route = useRoute<any>();
     const navigation = useNavigation<any>();
     const { streamUrl, title, tvgId, playlistId } = route.params;
-    console.log(`[Player] Initializing for streamUrl=${streamUrl}, title=${title}`);
-    const player = useVideoPlayer(streamUrl, player => {
-        console.log(`[Player] Starting playback for ${title}`);
-        player.play();
-    });
+    const insets = useSafeAreaInsets();
+
+    const useVlc = needsVlc(streamUrl);
 
     const [epgData, setEpgData] = useState<any[]>([]);
     const [showEpg, setShowEpg] = useState(false);
+    const [immersive, setImmersive] = useState(false);
     const slideAnim = useRef(new Animated.Value(300)).current;
+
+    useEffect(() => {
+        ScreenOrientation.lockAsync(
+            immersive ? ScreenOrientation.OrientationLock.LANDSCAPE : ScreenOrientation.OrientationLock.PORTRAIT_UP
+        ).catch(console.warn);
+    }, [immersive]);
+
+    useEffect(() => () => { ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP).catch(() => {}); }, []);
 
     useEffect(() => {
         if (tvgId && playlistId) {
             getEpgForChannel(playlistId, tvgId).then(data => {
                 setEpgData(data);
-                console.log(`[Player] Loaded ${data.length} EPG items for tvgId=${tvgId}`);
             }).catch(console.error);
         }
     }, [tvgId, playlistId]);
@@ -40,7 +47,6 @@ export default function PlayerScreen() {
     };
 
     const toggleEpg = () => {
-        console.log(`[Player] Toggling EPG: showEpg will be ${!showEpg}`);
         if (showEpg) {
             Animated.timing(slideAnim, { toValue: 300, duration: 300, useNativeDriver: true }).start(() => setShowEpg(false));
         } else {
@@ -51,26 +57,29 @@ export default function PlayerScreen() {
 
     return (
         <SafeAreaView style={styles.container}>
-            <View style={styles.header}>
-                <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
-                    <Text style={styles.backText}>← Back</Text>
-                </TouchableOpacity>
-                <Text style={styles.title} numberOfLines={1}>{title}</Text>
-                {epgData.length > 0 && (
-                    <TouchableOpacity onPress={toggleEpg} style={styles.epgButton}>
-                        <Text style={styles.epgButtonText}>TV Guide</Text>
+            {!immersive && (
+                <View style={[styles.header, { paddingTop: insets.top + 12 }]}>
+                    <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton} hitSlop={10}>
+                        <Text style={styles.backText}>← Back</Text>
                     </TouchableOpacity>
+                    <Text style={styles.title} numberOfLines={1}>{title}</Text>
+                    {epgData.length > 0 && (
+                        <TouchableOpacity onPress={toggleEpg} style={styles.epgButton}>
+                            <Text style={styles.epgButtonText}>TV Guide</Text>
+                        </TouchableOpacity>
+                    )}
+                </View>
+            )}
+
+            <View style={styles.playerContainer}>
+                {useVlc ? (
+                    <VlcPlayerView streamUrl={streamUrl} onToggleImmersive={() => setImmersive(v => !v)} />
+                ) : (
+                    <NativePlayerView streamUrl={streamUrl} />
                 )}
             </View>
 
-            <View style={styles.playerContainer}>
-                <VideoView
-                    style={styles.video}
-                    player={player}
-                />
-            </View>
-
-            {showEpg && (
+            {showEpg && !immersive && (
                 <Animated.View style={[styles.epgOverlay, { transform: [{ translateY: slideAnim }] }]}>
                     <Text style={styles.epgTitle}>Upcoming Programs</Text>
                     <FlatList
@@ -104,7 +113,6 @@ const styles = StyleSheet.create({
     epgButton: { backgroundColor: '#6c5ce7', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8 },
     epgButtonText: { color: '#fff', fontWeight: 'bold', fontSize: 12 },
     playerContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-    video: { width: '100%', height: '100%' },
     epgOverlay: { position: 'absolute', bottom: 0, width: '100%', height: '50%', backgroundColor: '#1c1c21', borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 20, shadowColor: '#000', shadowOffset: { width: 0, height: -5 }, shadowOpacity: 0.3, shadowRadius: 10, elevation: 10 },
     epgTitle: { color: '#fff', fontSize: 20, fontWeight: 'bold', marginBottom: 15 },
     epgItem: { marginBottom: 15, borderBottomWidth: 1, borderBottomColor: '#2a2a35', paddingBottom: 10 },

@@ -41,7 +41,6 @@ export default function HomeScreen() {
 
     const loadPlaylists = async () => {
         try {
-            console.log('[HomeScreen] loadPlaylists called');
             const data = await getPlaylistsFromDb();
             setPlaylists(data);
         } catch (error) {
@@ -64,7 +63,6 @@ export default function HomeScreen() {
             return;
         }
 
-        console.log(`[HomeScreen] handleAddM3u clicked: name=${name}, url=${validUrl}`);
         setLoading(true);
         try {
             const playlistId = await addPlaylistToDb(name, validUrl, validEpgUrl);
@@ -72,7 +70,6 @@ export default function HomeScreen() {
             setUrl(''); setName(''); setEpgUrl('');
 
             // Kick off background parsing (don't await it so UI isn't blocked)
-            console.log(`[HomeScreen] Kicking off background parsing for playlist ID=${playlistId}`);
             parsePlaylistBackground(playlistId, validUrl);
         } catch (e) {
             console.error(e);
@@ -88,7 +85,6 @@ export default function HomeScreen() {
             return;
         }
 
-        console.log(`[HomeScreen] handleAddXtream clicked: host=${host}, user=${username}`);
         setLoading(true);
 
         try {
@@ -106,18 +102,17 @@ export default function HomeScreen() {
                 baseUrl = `${baseUrl}:${port.trim()}`;
             }
 
-            const xtreamM3uUrl = `${baseUrl}/get.php?username=${username.trim()}&password=${password.trim()}&type=m3u_plus&output=ts`;
-            const xtreamEpgUrl = `${baseUrl}/xmltv.php?username=${username.trim()}&password=${password.trim()}`;
+            const creds = `username=${username.trim()}&password=${password.trim()}`;
+            const xtreamApiUrl = `${baseUrl}/player_api.php?${creds}`;
+            const xtreamEpgUrl = `${baseUrl}/xmltv.php?${creds}`;
             const playlistName = `Xtream: ${baseUrl}`;
 
-            const playlistId = await addPlaylistToDb(playlistName, xtreamM3uUrl, xtreamEpgUrl);
+            const playlistId = await addPlaylistToDb(playlistName, xtreamApiUrl, xtreamEpgUrl);
             await loadPlaylists();
 
             setHost(''); setPort(''); setUsername(''); setPassword('');
 
-            // Kick off background parsing
-            console.log(`[HomeScreen] Kicking off background parsing for Xtream playlist ID=${playlistId}`);
-            parsePlaylistBackground(playlistId, xtreamM3uUrl);
+            parsePlaylistBackground(playlistId, xtreamApiUrl);
         } catch (e) {
             console.error(e);
             Alert.alert('Error', 'Failed to add Xtream playlist');
@@ -129,7 +124,6 @@ export default function HomeScreen() {
     const handleRetry = async (item: any) => {
         await setPlaylistError(item.id, null as any); // Clear error
         await loadPlaylists();
-        console.log(`[HomeScreen] Retrying background parsing for playlist ID=${item.id}`);
         parsePlaylistBackground(item.id, item.url);
     };
 

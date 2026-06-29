@@ -7,7 +7,7 @@ export const initDb = async () => {
         return db;
     }
     db = await SQLite.openDatabaseAsync('app.db');
-    
+
     await db.execAsync(`
         CREATE TABLE IF NOT EXISTS Playlists (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -43,7 +43,7 @@ export const initDb = async () => {
         CREATE INDEX IF NOT EXISTS idx_channels_playlist ON Channels(playlistId);
         CREATE INDEX IF NOT EXISTS idx_programs_lookup ON Programs(playlistId, tvgId);
     `);
-    
+
     try {
         await db.execAsync("ALTER TABLE Playlists ADD COLUMN error TEXT;");
     } catch (e) {
@@ -90,7 +90,7 @@ export const getChannelsFromDb = async (playlistId: number, page: number = 1, pa
 
 export const getEpgForChannel = async (playlistId: number, tvgId: string) => {
     if (!tvgId) return [];
-    
+
     const database = await initDb();
     const rows = await database.getAllAsync(
         'SELECT * FROM Programs WHERE playlistId = ? AND tvgId = ? ORDER BY startTime ASC',

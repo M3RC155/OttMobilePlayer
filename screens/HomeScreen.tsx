@@ -68,8 +68,6 @@ export default function HomeScreen() {
             const playlistId = await addPlaylistToDb(name, validUrl, validEpgUrl);
             await loadPlaylists();
             setUrl(''); setName(''); setEpgUrl('');
-
-            // Kick off background parsing (don't await it so UI isn't blocked)
             parsePlaylistBackground(playlistId, validUrl);
         } catch (e) {
             console.error(e);
@@ -122,7 +120,7 @@ export default function HomeScreen() {
     };
 
     const handleRetry = async (item: any) => {
-        await setPlaylistError(item.id, null as any); // Clear error
+        await setPlaylistError(item.id, null as any);
         await loadPlaylists();
         parsePlaylistBackground(item.id, item.url);
     };
@@ -152,7 +150,6 @@ export default function HomeScreen() {
             await updatePlaylistInDb(editingPlaylist.id, editName, validUrl, editEpgUrl);
             setEditingPlaylist(null);
             await loadPlaylists();
-            // Re-trigger parse
             parsePlaylistBackground(editingPlaylist.id, validUrl);
         } catch (e) {
             console.error(e);

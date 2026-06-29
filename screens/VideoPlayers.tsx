@@ -6,8 +6,6 @@ import { VLCPlayer } from 'react-native-vlc-media-player';
 type Fit = 'contain' | 'cover' | 'fill';
 const nextFit = (f: Fit): Fit => (f === 'contain' ? 'cover' : f === 'cover' ? 'fill' : 'contain');
 
-// Pick the right player. iOS AVPlayer (expo-video) only handles HLS + progressive mp4/mov;
-// anything else (raw MPEG-TS, mkv, rtsp, ...) goes to VLC, which decodes it on iOS.
 export const needsVlc = (url: string) => !/\.(m3u8|mp4|mov|m4v)(\?|#|$)/i.test(url);
 
 const AspectButton = ({ fit, onPress }: { fit: Fit; onPress: () => void }) => (
@@ -53,14 +51,13 @@ export function NativePlayerView({ streamUrl }: { streamUrl: string }) {
     );
 }
 
-// Everything else (raw MPEGTS, mkv, rtsp...) — VLC with hand-built controls.
 export function VlcPlayerView({ streamUrl, onToggleImmersive }: { streamUrl: string; onToggleImmersive?: () => void }) {
     const ref = useRef<any>(null);
     const [error, setError] = useState<string | null>(null);
     const [paused, setPaused] = useState(false);
     const [fit, setFit] = useState<Fit>('contain');
     const [seekable, setSeekable] = useState(false);
-    const [position, setPosition] = useState(0); // 0..1
+    const [position, setPosition] = useState(0);
     const [reloadKey, setReloadKey] = useState(0);
     const [barWidth, setBarWidth] = useState(0);
 
@@ -91,7 +88,6 @@ export function VlcPlayerView({ streamUrl, onToggleImmersive }: { streamUrl: str
                 <TouchableOpacity style={styles.playBtn} onPress={() => setPaused(p => !p)}>
                     <Text style={styles.playIcon}>{paused ? '▶' : '⏸'}</Text>
                 </TouchableOpacity>
-                {/* Seek only for VOD (seekable). Live streams hide the bar. */}
                 {seekable && (
                     <View
                         style={styles.seekTrack}
